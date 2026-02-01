@@ -1,0 +1,7 @@
+{
+  "name": " MicroWorld Tycoon",
+  "description": "A deep micro-economy simulation where you start from nothing and build a global empire with the help of a real-time AI strategist.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
