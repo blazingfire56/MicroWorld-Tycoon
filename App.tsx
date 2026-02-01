@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Building, 
   BuildingType, 
@@ -11,715 +11,595 @@ import {
   Zone,
   BuildingCategory
 } from './types';
-import { INITIAL_RESOURCES, BUILDINGS, INITIAL_LIMITED_ITEMS, ZONES, DAY_DURATION } from './constants';
-import { getAIAdvice } from './services/gemini';
+import { INITIAL_RESOURCES, BUILDINGS, ZONES } from './constants';
 import { 
-  Zap, 
-  Hammer, 
-  Wheat, 
-  Coins, 
-  Gem, 
-  HelpCircle,
-  Lock,
-  Award,
-  Maximize2,
-  RefreshCw,
-  Move,
   Plus,
-  Droplets,
-  Trash2,
-  Cpu,
-  Home,
-  Factory,
-  Building as BuildingIcon,
-  ShoppingBag,
-  Wrench,
+  Minus,
   Sun,
   Moon,
-  ArrowUpCircle,
   TrendingUp,
-  DollarSign,
-  ChevronRight,
-  Menu
+  Menu,
+  Car,
+  Target,
+  Coins,
+  Waves,
+  Undo2,
+  RotateCcw,
+  Zap,
+  Users,
+  ArrowUpCircle,
+  TrendingDown,
+  Home,
+  Factory,
+  Trees,
+  CloudLightning,
+  ShoppingCart,
+  University,
+  ShieldCheck,
+  Stethoscope,
+  Building as BuildingIcon,
+  Warehouse,
+  Cpu,
+  HardDrive,
+  Component,
+  Castle,
+  Store,
+  Hotel,
+  Wind,
+  Flame,
+  Globe
 } from 'lucide-react';
+import { getAIAdvice } from './services/gemini';
 
-const CELL_SIZE = 40; // Dense grid for large map
-
-interface FloatingText {
-  id: number;
-  x: number;
-  y: number;
-  text: string;
-  type?: 'income' | 'spend';
-}
+const CELL_SIZE = 48; 
+const TICK_RATE_MS = 1000; 
 
 const App: React.FC = () => {
-  const initialHome: Building = {
-    id: 'starter-home',
-    type: 'starter_home',
-    level: 1,
-    position: { x: 15, y: 15 },
-    width: 1,
-    height: 1,
-    isIncorporated: true
-  };
-
-  const [gameState, setGameState] = useState<GameState>({
-    resources: INITIAL_RESOURCES,
-    buildings: [initialHome],
+  const getInitialGameState = (): GameState => ({
+    resources: { ...INITIAL_RESOURCES },
+    buildings: [{
+      id: 'starter-home',
+      type: 'starter_home',
+      level: 1,
+      position: { x: 15, y: 15 },
+      width: 2,
+      height: 2,
+      isIncorporated: true
+    }],
     day: 1,
-    aiAdvice: "Gospodine, grid je spreman za ekspanziju do 200x200. Shop je sada reaktivan u mikrosekundi!",
+    aiAdvice: "Direktore, grad je spreman za ekspanziju. Gradite kuće da privučete ljude.",
     isAnalyzing: false,
     marketPrices: {
-      food: { current: 30, trend: 'stable' },
-      wood: { current: 35, trend: 'stable' },
-      stone: { current: 85, trend: 'stable' },
-      tools: { current: 450, trend: 'stable' },
-      luxury: { current: 2200, trend: 'stable' },
-      tech: { current: 5000, trend: 'stable' },
+      food: { current: 15, trend: 'stable' },
+      wood: { current: 20, trend: 'stable' },
+      stone: { current: 45, trend: 'stable' },
+      tools: { current: 250, trend: 'stable' },
+      luxury: { current: 1200, trend: 'stable' },
+      tech: { current: 3000, trend: 'stable' },
     },
     reputation: 50,
     happiness: 80,
-    limitedItems: INITIAL_LIMITED_ITEMS,
+    limitedItems: [],
     lastStockReset: Date.now(),
-    unlockedZones: ['z1'],
+    unlockedZones: ['tier1'],
     tier: 1,
-    camera: { x: window.innerWidth/2 - 16*40, y: window.innerHeight/2 - 16*40, zoom: 0.8 },
-    npcs: [{ id: 'player', x: 15.5, y: 15.5, targetX: 15.5, targetY: 15.5, type: 'player', state: 'leisure', lastSpendingTick: 0 }],
-    activeQuests: [{ title: 'Proširi teritoriju na 64x64', isCompleted: false }],
-    activeEvent: undefined,
+    camera: { x: window.innerWidth / 2, y: window.innerHeight / 2, zoom: 1.0 },
+    npcs: [],
+    activeQuests: [{ title: 'Prvih 10 domova', isCompleted: false }],
     gridSize: 32
   });
 
-  const [selectedCell, setSelectedCell] = useState<{x: number, y: number} | null>(null);
+  const [gameState, setGameState] = useState<GameState>(getInitialGameState());
+  const [history, setHistory] = useState<Building[][]>([]);
+  const [isNight, setIsNight] = useState(false);
   const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'build' | 'market' | 'map'>('build');
   const [shopCategory, setShopCategory] = useState<BuildingCategory>('residential');
+  const [selectedBlueprint, setSelectedBlueprint] = useState<BuildingType | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [floatingTexts, setFloatingTexts] = useState<FloatingText[]>([]);
+  const [floatingTexts, setFloatingTexts] = useState<{id: number, x: number, y: number, text: string}[]>([]);
+  
   const dragStart = useRef({ x: 0, y: 0 });
-  const containerRef = useRef<HTMLDivElement>(null);
+  const dragDistance = useRef(0);
 
-  const isNight = useMemo(() => (gameState.day % 2 === 0), [gameState.day]);
+  const pushToHistory = () => {
+    setHistory(prev => [gameState.buildings, ...prev].slice(0, 20));
+  };
 
-  // Main Loop
   useEffect(() => {
-    const timer = setInterval(() => {
+    const timer = setTimeout(() => {
+      setIsNight(prev => {
+        if (prev) setGameState(g => ({ ...g, day: g.day + 1 }));
+        return !prev;
+      });
+    }, isNight ? 600000 : 1200000);
+    return () => clearTimeout(timer);
+  }, [isNight]);
+
+  useEffect(() => {
+    const fetchAdvice = async () => {
+      setGameState(prev => ({ ...prev, isAnalyzing: true }));
+      try {
+        const advice = await getAIAdvice(gameState);
+        setGameState(prev => ({ ...prev, aiAdvice: advice, isAnalyzing: false }));
+      } catch (e) {
+        setGameState(prev => ({ ...prev, isAnalyzing: false }));
+      }
+    };
+    const adviceInterval = setInterval(fetchAdvice, 45000);
+    fetchAdvice();
+    return () => clearInterval(adviceInterval);
+  }, []);
+
+  useEffect(() => {
+    const tick = setInterval(() => {
       setGameState(prev => {
-        const nextResources: Resources = { ...prev.resources };
-        let nextReputation = prev.reputation;
-        
+        const nr: Resources = { ...prev.resources };
+        const tickMult = TICK_RATE_MS / 30000;
+
         prev.buildings.forEach(b => {
           const stats = BUILDINGS[b.type];
-          const mult = 1 + (b.level - 1) * 0.8;
-          
-          Object.entries(stats.production).forEach(([res, amount]) => {
-            if (res === 'reputation') {
-              nextReputation += Number(amount) * mult;
-            } else {
-              (nextResources as any)[res] = Number((nextResources as any)[res]) + Number(amount) * mult;
-            }
+          const levelMult = 1 + (b.level - 1) * 0.5;
+          Object.entries(stats.production).forEach(([res, amt]) => {
+             if (res in nr) (nr as any)[res] += Number(amt) * tickMult * levelMult;
           });
-          Object.entries(stats.consumption).forEach(([res, amount]) => {
-            (nextResources as any)[res] = Math.max(0, Number((nextResources as any)[res]) - Number(amount) * mult);
+          Object.entries(stats.consumption).forEach(([res, amt]) => {
+             if (res in nr) (nr as any)[res] = Math.max(0, (nr as any)[res] - Number(amt) * tickMult);
           });
         });
 
-        return {
-          ...prev,
-          resources: nextResources,
-          day: prev.day + 1,
-          reputation: nextReputation,
-          npcs: updateNPCs(prev)
-        };
+        const nmp = { ...prev.marketPrices };
+        Object.keys(nmp).forEach(k => {
+          const p = nmp[k] as MarketPrice;
+          const change = (Math.random() - 0.5) * (p.current * 0.05);
+          p.current = Math.max(5, p.current + change);
+          p.trend = change > 0 ? 'up' : 'down';
+        });
+
+        return { ...prev, resources: nr, marketPrices: nmp, npcs: updateNPCLogic(prev) };
       });
-    }, DAY_DURATION);
-    return () => clearInterval(timer);
+    }, TICK_RATE_MS);
+    return () => clearInterval(tick);
   }, []);
 
-  // Fetch AI Advice periodically using the Gemini API service
-  useEffect(() => {
-    if (gameState.day > 1 && gameState.day % 5 === 0) {
-      const fetchAdvice = async () => {
-        setGameState(prev => ({ ...prev, isAnalyzing: true }));
-        try {
-          const advice = await getAIAdvice(gameState);
-          setGameState(prev => ({ ...prev, aiAdvice: advice, isAnalyzing: false }));
-        } catch (error) {
-          console.error("AI Advice retrieval error:", error);
-          setGameState(prev => ({ ...prev, isAnalyzing: false }));
-        }
-      };
-      fetchAdvice();
-    }
-  }, [gameState.day]);
+  const updateNPCLogic = (prev: GameState) => {
+    const houses = prev.buildings.filter(b => BUILDINGS[b.type].category === 'residential');
+    if (houses.length < 5) return [];
 
-  const updateNPCs = (prev: GameState) => {
-    const targetCount = Math.min(100, Math.floor(prev.resources.workers / 1.1) + 12);
     let nextNpcs = [...prev.npcs];
-    
-    const homes = prev.buildings.filter(b => BUILDINGS[b.type].category === 'residential');
-    const shops = prev.buildings.filter(b => BUILDINGS[b.type].category === 'commercial');
-
-    if (nextNpcs.length < targetCount) {
-      const home = homes[Math.floor(Math.random() * homes.length)];
+    if (nextNpcs.length < Math.min(houses.length * 2, 50)) {
+      const h = houses[Math.floor(Math.random() * houses.length)];
       nextNpcs.push({
         id: Math.random().toString(),
-        x: home ? home.position.x + 0.5 : Math.random() * prev.gridSize,
-        y: home ? home.position.y + 0.5 : Math.random() * prev.gridSize,
-        targetX: Math.random() * prev.gridSize,
-        targetY: Math.random() * prev.gridSize,
-        type: 'citizen',
-        homeId: home?.id,
-        state: 'leisure',
-        lastSpendingTick: 0
+        x: h.position.x + h.width/2, y: h.position.y + h.height/2,
+        targetX: Math.random() * prev.gridSize, targetY: Math.random() * prev.gridSize,
+        type: 'citizen', state: 'leisure', isDriving: false, lastSpendingTick: 0
       });
     }
 
-    const dayCycle = prev.day % 2; 
-
     return nextNpcs.map(npc => {
-      let targetX = npc.targetX;
-      let targetY = npc.targetY;
-      let state = npc.state;
+      const roadUnder = prev.buildings.find(b => 
+        BUILDINGS[b.type].isRoad && 
+        npc.x >= b.position.x && npc.x <= b.position.x + b.width &&
+        npc.y >= b.position.y && npc.y <= b.position.y + b.height
+      );
 
-      if (dayCycle === 0) { // DAY
-        if (Math.random() > 0.9 && shops.length > 0 && npc.state !== 'shopping') {
-          const shop = shops[Math.floor(Math.random() * shops.length)];
-          targetX = shop.position.x + (shop.width / 2);
-          targetY = shop.position.y + (shop.height / 2);
-          state = 'shopping';
-        }
-      } else if (npc.homeId) { // NIGHT
-        const homeB = prev.buildings.find(b => b.id === npc.homeId);
-        if (homeB) {
-          targetX = homeB.position.x + (homeB.width / 2);
-          targetY = homeB.position.y + (homeB.height / 2);
-          state = 'sleeping';
-        }
+      const isDriving = !!roadUnder;
+      const spd = isDriving ? 0.3 : 0.08;
+      
+      let dx = npc.targetX - npc.x;
+      let dy = npc.targetY - npc.y;
+
+      if (isDriving) {
+        if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0;
       }
 
-      const dx = targetX - npc.x;
-      const dy = targetY - npc.y;
       const dist = Math.sqrt(dx*dx + dy*dy);
-      let speed = 0.08;
-
       if (dist < 0.2) {
-        if (state === 'shopping' && Math.random() > 0.97) state = 'leisure';
-        return { ...npc, state };
+        return { ...npc, targetX: Math.random() * prev.gridSize, targetY: Math.random() * prev.gridSize };
       }
 
-      return { ...npc, x: npc.x + dx * speed, y: npc.y + dy * speed, state };
+      return { ...npc, x: npc.x + (dx/dist)*spd, y: npc.y + (dy/dist)*spd, isDriving };
     });
   };
 
-  // Fixed missing handleBuildingClick error
-  const handleBuildingClick = (e: React.MouseEvent, b: Building) => {
-    e.stopPropagation();
-    setSelectedBuildingId(b.id);
-    setSelectedCell(null);
-  };
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 0) {
-      setIsDragging(true);
-      dragStart.current = { x: e.clientX - gameState.camera.x, y: e.clientY - gameState.camera.y };
+  const sellResource = (res: ResourceType, amt: number) => {
+    const price = gameState.marketPrices[res]?.current || 0;
+    const currentAmt = (gameState.resources as any)[res] || 0;
+    
+    if (currentAmt >= amt) {
+      setGameState(prev => {
+        const nr = { ...prev.resources };
+        (nr as any)[res] -= amt;
+        nr.money += amt * price;
+        return { ...prev, resources: nr };
+      });
     }
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging) {
-      setGameState(prev => ({
+  const handleBuild = (type: BuildingType, x: number, y: number) => {
+    const stats = BUILDINGS[type];
+    const isBlocked = gameState.buildings.some(b => 
+      x < b.position.x + b.width && x + stats.width > b.position.x && 
+      y < b.position.y + b.height && y + stats.height > b.position.y
+    );
+    if (isBlocked) return;
+
+    const affordable = Object.entries(stats.cost).every(([res, amt]) => (gameState.resources as any)[res] >= (amt || 0));
+    if (!affordable) return;
+
+    pushToHistory();
+    setGameState(prev => {
+      const nr = { ...prev.resources };
+      Object.entries(stats.cost).forEach(([res, amt]) => (nr as any)[res] -= (amt || 0));
+      return {
         ...prev,
-        camera: { ...prev.camera, x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y }
+        resources: nr,
+        buildings: [...prev.buildings, { id: Math.random().toString(), type, level: 1, position: { x, y }, width: stats.width, height: stats.height, isIncorporated: false }]
+      };
+    });
+  };
+
+  const handleUpgrade = (id: string) => {
+    const b = gameState.buildings.find(x => x.id === id);
+    if (!b) return;
+    const stats = BUILDINGS[b.type];
+    const cost = Math.floor(stats.cost.money! * b.level * 2);
+    
+    if (gameState.resources.money >= cost) {
+      pushToHistory();
+      setGameState(p => ({
+        ...p,
+        resources: { ...p.resources, money: p.resources.money - cost },
+        buildings: p.buildings.map(x => x.id === id ? { ...x, level: x.level + 1 } : x)
       }));
     }
   };
 
-  const handleMouseUp = () => setIsDragging(false);
+  const handleBuildingClick = (e: React.MouseEvent, b: Building) => {
+    if (dragDistance.current > 10) return;
+    e.stopPropagation();
+    
+    const stats = BUILDINGS[b.type];
+    setSelectedBuildingId(b.id);
 
-  const isZoneUnlocked = (x: number, y: number) => {
-    const zone = ZONES.find(z => x >= z.gridRange.xMin && x <= z.gridRange.xMax && y >= z.gridRange.yMin && y <= z.gridRange.yMax);
-    return zone && gameState.unlockedZones.includes(zone.id);
+    if (stats.category === 'residential') {
+      const gain = b.level * 50;
+      setGameState(prev => ({
+        ...prev,
+        resources: { ...prev.resources, money: prev.resources.money + gain }
+      }));
+      
+      const tid = Date.now();
+      setFloatingTexts(prev => [...prev, { id: tid, x: e.clientX, y: e.clientY, text: `+$${gain}` }]);
+      setTimeout(() => setFloatingTexts(f => f.filter(t => t.id !== tid)), 1000);
+    }
   };
 
-  const handleBuild = (type: BuildingType) => {
-    if (!selectedCell) return;
-    const stats = BUILDINGS[type];
-    
-    if (selectedCell.x + stats.width > gameState.gridSize || selectedCell.y + stats.height > gameState.gridSize) return;
+  const getRoadConnections = (b: Building) => {
+    const isHighway = b.type === 'highway';
+    const step = isHighway ? 4 : 2;
+    const neighbors = {
+      t: gameState.buildings.some(n => n.id !== b.id && BUILDINGS[n.type].isRoad && n.position.x === b.position.x && n.position.y === b.position.y - step),
+      b: gameState.buildings.some(n => n.id !== b.id && BUILDINGS[n.type].isRoad && n.position.x === b.position.x && n.position.y === b.position.y + step),
+      l: gameState.buildings.some(n => n.id !== b.id && BUILDINGS[n.type].isRoad && n.position.x === b.position.x - step && n.position.y === b.position.y),
+      r: gameState.buildings.some(n => n.id !== b.id && BUILDINGS[n.type].isRoad && n.position.x === b.position.x + step && n.position.y === b.position.y),
+    };
+    return neighbors;
+  };
 
-    for (let i = 0; i < stats.width; i++) {
-      for (let j = 0; j < stats.height; j++) {
-        if (!isZoneUnlocked(selectedCell.x + i, selectedCell.y + j)) return;
-      }
+  const getBuildingVisual = (type: BuildingType, level: number = 1) => {
+    const iconSize = 28;
+    const cat = BUILDINGS[type].category;
+
+    // Visual progression based on level
+    if (cat === 'residential') {
+      if (level >= 5) return <BuildingIcon size={iconSize} className="text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]" />;
+      if (level >= 3) return <Warehouse size={iconSize} className="text-blue-300" />;
+      return <Home size={iconSize} className="text-blue-400" />;
     }
 
-    const collision = gameState.buildings.some(b => {
-      return (selectedCell.x < b.position.x + b.width && selectedCell.x + stats.width > b.position.x &&
-              selectedCell.y < b.position.y + b.height && selectedCell.y + stats.height > b.position.y);
-    });
-    if (collision) return;
+    if (cat === 'production') {
+      if (level >= 5) return <Cpu size={iconSize} className="text-amber-300 drop-shadow-[0_0_8px_rgba(251,191,36,0.6)]" />;
+      if (level >= 3) return <HardDrive size={iconSize} className="text-amber-500" />;
+      return <Factory size={iconSize} className="text-amber-600" />;
+    }
 
-    const canAfford = Object.entries(stats.cost).every(([res, amount]) => 
-      (gameState.resources as any)[res] >= (amount || 0)
-    );
-    if (!canAfford) return;
+    if (cat === 'infrastructure') {
+      if (type === 'powerplant' || type === 'nuclear_plant') {
+        if (level >= 5) return <Globe size={iconSize} className="text-yellow-200 drop-shadow-[0_0_10px_rgba(254,240,138,0.7)]" />;
+        return <CloudLightning size={iconSize} className="text-yellow-400" />;
+      }
+      if (level >= 3) return <Wind size={iconSize} className="text-slate-300" />;
+      return <Zap size={iconSize} className="text-slate-400" />;
+    }
 
-    setGameState(prev => {
-      const nextRes = { ...prev.resources };
-      Object.entries(stats.cost).forEach(([res, amt]) => { (nextRes as any)[res] -= (amt || 0); });
-      
-      return {
-        ...prev,
-        resources: nextRes,
-        buildings: [...prev.buildings, { 
-          id: Math.random().toString(), 
-          type, level: 1, 
-          position: { ...selectedCell }, 
-          width: stats.width, height: stats.height, 
-          isIncorporated: false 
-        }],
-        reputation: prev.reputation + (stats.repImpact || 0)
-      };
-    });
-    setSelectedCell(null);
+    if (cat === 'commercial') {
+      if (level >= 5) return <Hotel size={iconSize} className="text-emerald-200 drop-shadow-[0_0_8px_rgba(16,185,129,0.5)]" />;
+      if (level >= 3) return <Store size={iconSize} className="text-emerald-400" />;
+      return <ShoppingCart size={iconSize} className="text-emerald-600" />;
+    }
+
+    if (cat === 'public') {
+      if (level >= 5) return <Castle size={iconSize} className="text-indigo-200 drop-shadow-[0_0_8px_rgba(99,102,241,0.6)]" />;
+      if (type === 'school' || type === 'university') return <University size={iconSize} className="text-indigo-400" />;
+      if (type === 'police_station') return <ShieldCheck size={iconSize} className="text-blue-600" />;
+      if (type === 'hospital') return <Stethoscope size={iconSize} className="text-red-400" />;
+      return <Target size={iconSize} className="text-indigo-400" />;
+    }
+
+    if (cat === 'nature') {
+      if (level >= 3) return <Trees size={iconSize} className="text-green-400" />;
+      return <Trees size={iconSize} className="text-green-600" opacity={0.6} />;
+    }
+
+    return <span>🏛️</span>;
   };
 
-  const handleUpgrade = (bId: string) => {
-    const building = gameState.buildings.find(b => b.id === bId);
-    if (!building) return;
-    const stats = BUILDINGS[building.type];
-    const upgradeCost = Math.floor(stats.cost.money! * building.level * 2.5);
-
-    if (gameState.resources.money < upgradeCost) return;
-
-    setGameState(prev => ({
-      ...prev,
-      resources: { ...prev.resources, money: prev.resources.money - upgradeCost },
-      buildings: prev.buildings.map(b => b.id === bId ? { ...b, level: b.level + 1 } : b),
-      reputation: prev.reputation + 100
-    }));
-  };
-
-  const occupancy = useMemo(() => {
-    const unlockedZones = ZONES.filter(z => gameState.unlockedZones.includes(z.id));
-    const lastZone = unlockedZones[unlockedZones.length - 1];
-    if (!lastZone) return 0;
-    const totalCells = (lastZone.gridRange.xMax - lastZone.gridRange.xMin + 1) * (lastZone.gridRange.yMax - lastZone.gridRange.yMin + 1);
-    const occupiedInLastZone = gameState.buildings.filter(b => 
-      b.position.x >= lastZone.gridRange.xMin && b.position.x <= lastZone.gridRange.xMax &&
-      b.position.y >= lastZone.gridRange.yMin && b.position.y <= lastZone.gridRange.yMax
-    ).reduce((acc, b) => acc + (b.width * b.height), 0);
-    return (occupiedInLastZone / totalCells) * 100;
-  }, [gameState.buildings, gameState.unlockedZones]);
-
-  const selectedBuilding = useMemo(() => gameState.buildings.find(b => b.id === selectedBuildingId), [selectedBuildingId, gameState.buildings]);
-
-  const getResourceIcon = (res: string) => {
-    switch(res) {
-      case 'money': return <Coins size={14} className="text-emerald-400" />;
-      case 'food': return <Wheat size={14} className="text-emerald-400" />;
-      case 'energy': return <Zap size={14} className="text-yellow-400" />;
-      case 'water': return <Droplets size={14} className="text-blue-400" />;
-      case 'waste': return <Trash2 size={14} className="text-orange-500" />;
-      case 'tech': return <Cpu size={14} className="text-indigo-400" />;
-      default: return null;
+  const getBuildingEmoji = (type: BuildingType) => {
+    switch(type) {
+      case 'starter_home': return '🏢';
+      case 'suburban_house': return '🏡';
+      case 'skyscraper': return '🌆';
+      case 'farm': return '🚜';
+      case 'quarry': return '⛏️';
+      case 'park': return '🌳';
+      case 'forest': return '🌲';
+      case 'sidewalk': return '⬜';
+      default: return '';
     }
   };
 
   return (
-    <div className={`flex h-screen w-full transition-colors duration-[3000ms] ${isNight ? 'bg-[#010106]' : 'bg-[#040404]'} text-gray-100 font-sans select-none overflow-hidden relative`}>
+    <div className={`flex h-screen w-full ${isNight ? 'bg-[#03060a]' : 'bg-[#081226]'} transition-colors duration-[5000ms] text-slate-100 overflow-hidden relative`}>
+      
       {/* SIDEBAR */}
-      <div className={`${isSidebarOpen ? 'w-full lg:w-[440px]' : 'w-0 lg:w-[60px]'} h-full bg-[#0c0c0e]/98 backdrop-blur-3xl border-r border-white/5 flex flex-col z-50 transition-all duration-500 shadow-2xl relative overflow-hidden shrink-0`}>
-        <div className="p-6 border-b border-white/5 bg-indigo-900/10 shrink-0">
-          <div className="flex items-center justify-between mb-6">
-             <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-2xl border border-indigo-400/40">
-                  <TrendingUp size={28} className="text-white" />
-                </div>
-                {isSidebarOpen && (
-                  <div className="animate-in fade-in slide-in-from-left-4 duration-500">
-                    <h1 className="font-black text-xl tracking-tighter uppercase italic text-white leading-none">TYCOON <span className="text-indigo-400">ULTRA</span></h1>
-                    <span className="text-[9px] font-black text-indigo-400/50 uppercase tracking-[0.4em] block mt-1">Expansion System</span>
-                  </div>
-                )}
-             </div>
-             <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-3 bg-white/5 rounded-2xl hover:bg-white/10 transition-all border border-white/5 lg:block hidden">
-               <Menu size={20} />
-             </button>
-             <button onClick={() => setIsSidebarOpen(false)} className="p-3 bg-white/5 rounded-2xl lg:hidden block">
-               <ChevronRight size={20} />
-             </button>
-          </div>
-
-          {isSidebarOpen && (
-            <div className="grid grid-cols-2 gap-4 mb-2 animate-in fade-in duration-500">
-              <div className="bg-black/60 p-4 rounded-[2rem] border border-white/10 shadow-2xl">
-                <span className="text-[9px] font-black text-gray-500 uppercase block mb-2 tracking-widest">Sektor: {gameState.gridSize}x{gameState.gridSize}</span>
-                <div className="w-full bg-white/5 h-2.5 rounded-full overflow-hidden">
-                  <div className="h-full bg-indigo-500 transition-all duration-1000 shadow-[0_0_15px_rgba(99,102,241,1)]" style={{ width: `${Math.min(100, occupancy)}%` }} />
-                </div>
-              </div>
-              <div className="bg-black/60 p-4 rounded-[2rem] border border-white/10 shadow-2xl text-center flex flex-col justify-center">
-                <p className="text-2xl font-black font-mono tracking-tighter text-indigo-400 leading-none">{Math.floor(gameState.reputation)}</p>
-                <span className="text-[8px] font-black text-gray-600 uppercase mt-1">RANK</span>
-              </div>
-            </div>
-          )}
+      <div className={`${isSidebarOpen ? 'w-[380px]' : 'w-0'} h-full bg-[#07101f] border-r border-indigo-500/30 flex flex-col z-50 transition-all shadow-2xl overflow-hidden`}>
+        <div className="p-6 border-b border-indigo-500/30 flex justify-between items-center">
+          <h1 className="font-black text-xl italic text-indigo-100 uppercase tracking-tighter">Sim <span className="text-indigo-400">Ultra</span></h1>
+          <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden"><Menu/></button>
         </div>
 
-        {isSidebarOpen && (
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6 animate-in fade-in duration-500">
-            <div className="flex bg-black/60 p-1.5 rounded-[2.5rem] border border-white/5 backdrop-blur-3xl">
-              {['build', 'market', 'map'].map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab as any)}
-                  className={`flex-1 py-4 rounded-[2rem] text-[10px] font-black uppercase tracking-[0.2em] transition-all ${
-                    activeTab === tab ? 'bg-indigo-600 text-white shadow-2xl scale-105' : 'text-gray-500 hover:text-gray-300'
-                  }`}
-                >
-                  {tab === 'build' ? 'OBJEKTI' : tab === 'market' ? 'BERZA' : 'MAPA'}
-                </button>
-              ))}
-            </div>
-
-            {activeTab === 'build' && (
-              <div className="space-y-6 pb-24">
-                <div className="flex justify-between gap-3 overflow-x-auto pb-2 scrollbar-hide">
-                  {(['residential', 'production', 'commercial', 'public', 'infrastructure'] as BuildingCategory[]).map(cat => (
-                    <button 
-                      key={cat}
-                      onClick={() => setShopCategory(cat)}
-                      className={`flex flex-col items-center justify-center min-w-[80px] h-14 rounded-2xl border transition-all ${
-                        shopCategory === cat ? 'bg-indigo-600 border-indigo-400 text-white' : 'bg-white/5 border-white/5 text-gray-500 hover:bg-white/10'
-                      }`}
-                    >
-                      <span className="text-[9px] font-black uppercase tracking-tighter">{cat.slice(0, 4)}</span>
-                    </button>
-                  ))}
-                </div>
-
-                {Object.entries(BUILDINGS)
-                  .filter(([_, stats]) => stats.category === shopCategory)
-                  .filter(([type]) => type !== 'starter_home')
-                  .map(([type, stats]) => {
-                  const unlocked = gameState.buildings.filter(b => b.type === stats.unlockRequirement?.type).length >= (stats.unlockRequirement?.count || 0);
-                  const canAfford = Object.entries(stats.cost).every(([res, amount]) => (gameState.resources as any)[res] >= (amount || 0));
-                  
-                  return (
-                    <button
-                      key={type}
-                      disabled={!canAfford || !unlocked}
-                      onClick={() => { handleBuild(type as BuildingType); if (window.innerWidth < 1024) setIsSidebarOpen(false); }}
-                      className={`w-full p-6 rounded-[3rem] border text-left transition-all relative overflow-hidden group shadow-xl ${
-                        !unlocked ? 'bg-black/95 opacity-20 grayscale pointer-events-none' : !canAfford ? 'bg-white/[0.01] border-white/5 opacity-50 grayscale' : 'bg-white/[0.04] border-white/10 hover:border-indigo-500/50 hover:bg-white/[0.08] hover:-translate-y-2 active:scale-95'
-                      }`}
-                    >
-                      {!unlocked && (
-                        <div className="absolute inset-0 bg-black/95 flex flex-col items-center justify-center p-4 text-center z-10">
-                          <Lock size={20} className="text-gray-800 mb-2" />
-                          <p className="text-[8px] font-black text-gray-700 uppercase tracking-widest">{stats.unlockRequirement?.count}x {stats.unlockRequirement?.type}</p>
-                        </div>
-                      )}
-                      <div className="flex justify-between items-start mb-3">
-                        <h5 className="font-black text-sm uppercase tracking-tight text-white italic">{stats.label} <span className="text-[10px] text-indigo-500/30 ml-2 font-mono">{stats.width}x{stats.height}</span></h5>
-                        <span className={`text-[12px] font-black font-mono px-3 py-1 rounded-2xl ${canAfford ? 'text-emerald-400 bg-emerald-400/10' : 'text-red-400 bg-red-400/10'}`}>${stats.cost.money?.toLocaleString()}</span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {Object.entries(stats.cost).map(([res, amt]) => amt! > 0 && res !== 'money' && (
-                          <div key={res} className="flex items-center gap-2 bg-black/60 px-3 py-1 rounded-xl text-[10px] font-black uppercase text-gray-400 border border-white/5">
-                            {getResourceIcon(res)} {amt}
-                          </div>
-                        ))}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {activeTab === 'market' && (
-              <div className="space-y-4">
-                {(Object.entries(gameState.marketPrices) as [string, MarketPrice][]).map(([res, data]) => (
-                  <div key={res} className="bg-black/60 p-6 rounded-[2.5rem] border border-white/10 flex justify-between items-center group shadow-xl hover:bg-white/5 transition-all">
-                    <div className="flex items-center gap-4">
-                      <div className="w-14 h-14 rounded-[1.5rem] bg-indigo-500/10 flex items-center justify-center border border-indigo-500/20 group-hover:scale-110 transition-transform">
-                        {getResourceIcon(res)}
-                      </div>
-                      <div>
-                        <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1 italic">{res}</p>
-                        <p className="text-2xl font-black font-mono tracking-tighter text-white">${data.current}</p>
-                      </div>
-                    </div>
-                    <button 
-                      disabled={gameState.resources[res as ResourceType] < 1}
-                      onClick={() => {
-                        setGameState(prev => ({
-                          ...prev,
-                          resources: { ...prev.resources, [res]: prev.resources[res as ResourceType] - 1, money: prev.resources.money + data.current }
-                        }));
-                      }}
-                      className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-[2rem] text-[11px] font-black uppercase tracking-widest transition-all shadow-xl disabled:opacity-20 active:scale-90"
-                    >
-                      PRODAJ
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {activeTab === 'map' && (
-              <div className="space-y-6">
-                {ZONES.map((zone, idx) => {
-                  const isUnlocked = gameState.unlockedZones.includes(zone.id);
-                  const canUnlockNext = occupancy >= 60;
-                  const isNext = !isUnlocked && gameState.unlockedZones.length === idx;
-
-                  return (
-                    <div key={zone.id} className={`p-8 rounded-[3.5rem] border transition-all shadow-xl ${isUnlocked ? 'bg-emerald-500/5 border-emerald-500/10 opacity-70 scale-95' : 'bg-black/80 border-white/10 hover:border-indigo-500/30'}`}>
-                      <div className="flex justify-between items-center mb-8">
-                        <div className="flex flex-col">
-                          <h5 className="font-black text-lg uppercase tracking-[0.2em] text-white italic leading-none mb-2">{zone.name}</h5>
-                          <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">{isUnlocked ? 'STATUS: KONTROLISANO' : 'STATUS: DOSTUPNO'}</span>
-                        </div>
-                        {isUnlocked ? <Award size={32} className="text-emerald-400 drop-shadow-[0_0_10px_rgba(52,211,153,0.5)]" /> : <Lock size={24} className="text-gray-800" />}
-                      </div>
-                      {!isUnlocked && (
-                        <button
-                          disabled={!isNext || !canUnlockNext || gameState.resources.money < zone.cost}
-                          onClick={() => {
-                            setGameState(prev => ({
-                              ...prev,
-                              resources: { ...prev.resources, money: prev.resources.money - zone.cost },
-                              unlockedZones: [...prev.unlockedZones, zone.id],
-                              gridSize: zone.expansionSize,
-                              aiAdvice: `Ekspanzija uspešna! Grid proširen na ${zone.expansionSize}x${zone.expansionSize}.`
-                            }));
-                          }}
-                          className="w-full py-6 bg-white text-black hover:bg-indigo-600 hover:text-white disabled:opacity-20 rounded-[2.5rem] text-[12px] font-black uppercase tracking-[0.4em] transition-all shadow-2xl"
-                        >
-                          {!canUnlockNext ? `POTREBNO 60% POPUNJENOSTI` : `OTKUPI ZA $${zone.cost.toLocaleString()}`}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* VIEWPORT */}
-      <div className="flex-1 relative flex flex-col overflow-hidden">
-        {/* HUD Top - Mobile Responsive */}
-        <div className="h-24 lg:h-28 bg-black/95 backdrop-blur-3xl border-b border-white/10 flex items-center justify-between px-6 lg:px-12 z-40 shadow-2xl shrink-0">
-           <button onClick={() => setIsSidebarOpen(true)} className="p-3 bg-white/5 rounded-2xl mr-4 lg:hidden">
-              <Menu size={24} />
-           </button>
-           <div className="flex items-center gap-6 lg:gap-10 overflow-x-auto scrollbar-hide py-2 flex-1 mask-linear-gradient">
-             {Object.entries(gameState.resources).map(([res, val]) => (
-               <div key={res} className="flex flex-col items-center min-w-[70px] lg:min-w-[80px]">
-                  <span className="text-[9px] font-black uppercase text-gray-500 mb-1 tracking-tighter leading-none">{res}</span>
-                  <span className={`font-mono font-black text-lg lg:text-2xl leading-none ${res === 'money' ? 'text-emerald-400' : 'text-white'}`}>
-                    {res === 'money' ? '$' : ''}{Math.floor(val as number).toLocaleString()}
-                  </span>
-               </div>
-             ))}
-           </div>
-           <div className="flex items-center gap-4 lg:gap-8 pl-6 lg:pl-10 border-l border-white/10 shrink-0">
-              <div className="hidden sm:flex flex-col items-end">
-                <span className="text-[10px] font-black text-indigo-400 uppercase tracking-[0.4em] italic drop-shadow-lg">DAN {gameState.day}</span>
-              </div>
-              <div className="w-12 h-12 lg:w-16 lg:h-16 rounded-full bg-white/5 flex items-center justify-center border border-white/10">
-                 {isNight ? <Moon size={24} className="text-indigo-400" /> : <Sun size={24} className="text-amber-400" />}
-              </div>
-           </div>
-        </div>
-
-        <div 
-          ref={containerRef}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          className="flex-1 relative overflow-hidden cursor-grab active:cursor-grabbing bg-[#050508]"
-        >
-          <div 
-            className="absolute origin-top-left transition-transform duration-100 ease-out"
-            style={{ 
-              transform: `translate(${gameState.camera.x}px, ${gameState.camera.y}px) scale(${gameState.camera.zoom})`,
-              width: gameState.gridSize * CELL_SIZE,
-              height: gameState.gridSize * CELL_SIZE
-            }}
-          >
-            {/* Infinite Grid Visual */}
-            <div className="absolute inset-0 bg-[#080a08]" style={{ 
-              backgroundImage: 'linear-gradient(rgba(255,255,255,0.01) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.01) 1px, transparent 1px)', 
-              backgroundSize: `${CELL_SIZE}px ${CELL_SIZE}px` 
-            }} />
-
-            {/* Selection Grid */}
-            {Array.from({ length: gameState.gridSize * gameState.gridSize }).map((_, i) => {
-              const x = i % gameState.gridSize;
-              const y = Math.floor(i / gameState.gridSize);
-              const unlocked = isZoneUnlocked(x, y);
-              const isSelected = selectedCell?.x === x && selectedCell?.y === y;
-              
-              if (!unlocked) return <div key={i} className="absolute w-[40px] h-[40px] bg-black/90 z-0 border border-black/40" style={{ left: x * CELL_SIZE, top: y * CELL_SIZE }} />;
-
-              return (
-                <div 
-                  key={i}
-                  onClick={(e) => { e.stopPropagation(); setSelectedCell({x, y}); setSelectedBuildingId(null); }}
-                  className={`absolute w-[40px] h-[40px] border-[0.5px] border-white/5 transition-all ${isSelected ? 'bg-indigo-500/30 ring-4 ring-indigo-400/40 z-10 scale-105 shadow-2xl' : 'hover:bg-white/[0.03]'}`}
-                  style={{ left: x * CELL_SIZE, top: y * CELL_SIZE }}
-                />
-              );
-            })}
-
-            {/* Smart Footprint Buildings */}
-            {gameState.buildings.map(b => {
-              const emoji = BUILDINGS[b.type].isRoad ? (b.type === 'road' ? '⬛' : '🟫') : '';
-              return (
-               <div
-                 key={b.id}
-                 onClick={(e) => handleBuildingClick(e, b)}
-                 className={`absolute z-10 animate-in fade-in duration-300 cursor-pointer transition-all group ${selectedBuildingId === b.id ? 'ring-4 ring-indigo-500 rounded-xl z-20' : ''}`}
-                 style={{ 
-                   left: b.position.x * CELL_SIZE, top: b.position.y * CELL_SIZE, 
-                   width: b.width * CELL_SIZE, height: b.height * CELL_SIZE 
-                 }}
-               >
-                  <div className={`w-full h-full flex items-center justify-center relative transition-all duration-300 overflow-hidden
-                    ${BUILDINGS[b.type].isRoad 
-                      ? 'bg-[#18181a] border border-white/5 shadow-inner' 
-                      : 'bg-white/[0.07] rounded-xl border border-white/10 shadow-2xl group-hover:from-white/[0.1] group-hover:-translate-y-1'
-                    }`}>
-                    
-                    {BUILDINGS[b.type].isRoad && (
-                       <div className="absolute w-full h-[2px] bg-yellow-500/30 shadow-[0_0_8px_yellow]" style={{ top: '50%', transform: 'translateY(-50%)' }} />
-                    )}
-
-                    <div 
-                      className="drop-shadow-2xl filter saturate-[1.4] brightness-125 transform group-hover:scale-110 transition-transform leading-none text-center select-none"
-                      style={{ fontSize: `${Math.min(b.width, b.height) * 28}px` }}
-                    >
-                       {b.type === 'starter_home' && '🏛️'}
-                       {b.type === 'small_shack' && '🏚️'}
-                       {b.type === 'suburban_house' && '🏡'}
-                       {b.type === 'factory' && '🏭'}
-                       {b.type === 'school' && '🏫'}
-                       {b.type === 'skyscraper' && '🏢'}
-                       {b.type === 'road' && '⬛'}
-                       {b.type === 'mall' && '🛍️'}
-                       {b.type === 'stadium' && '🏟️'}
-                       {b.type === 'university' && '🎓'}
-                       {b.type === 'airport' && '✈️'}
-                       {b.type === 'luxury_mansion' && '🏰'}
-                       {b.type === 'modern_villa' && '🏠'}
-                       {b.type === 'capsule_hotel' && '🏨'}
-                       {b.type === 'bank' && '🏦'}
-                       {b.type === 'hospital' && '🏥'}
-                       {b.type === 'park' && '🌳'}
-                       {b.type === 'cinema' && '🎬'}
-                       {b.type === 'iron_mine' && '⛏️'}
-                       {b.type === 'quarry' && '🧱'}
-                       {b.type === 'farm' && '🌾'}
-                       {b.type === 'orchard' && '🍎'}
-                    </div>
-                    {b.level > 1 && (
-                      <div className="absolute top-1 right-1 bg-indigo-600 text-[7px] font-black px-1 py-0.5 rounded-md border border-white/10 shadow-lg">LV {b.level}</div>
-                    )}
-                  </div>
-               </div>
-            )})}
-
-            {/* Smart NPCs */}
-            {gameState.npcs.map(npc => (
-               <div key={npc.id} className="absolute w-6 h-6 flex items-center justify-center z-30 pointer-events-none transition-all duration-[600ms] ease-linear" 
-                 style={{ 
-                   left: npc.x * CELL_SIZE, 
-                   top: npc.y * CELL_SIZE, 
-                   transform: 'translate(-50%, -50%)' 
-                 }}>
-                  <div className={`text-lg filter drop-shadow-2xl flex flex-col items-center ${npc.type === 'player' ? 'scale-150 brightness-150 z-40' : 'opacity-100'}`}>
-                    {npc.type === 'player' ? '👑' : '🚶'}
-                  </div>
-               </div>
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
+          <div className="flex bg-black/40 p-1 rounded-2xl border border-white/5">
+            {['build', 'market', 'map'].map(t => (
+              <button key={t} onClick={() => setActiveTab(t as any)} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${activeTab === t ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-300'}`}>{t}</button>
             ))}
           </div>
 
-          {/* Night Overlay */}
-          <div className={`absolute inset-0 pointer-events-none transition-opacity duration-[3000ms] ${isNight ? 'opacity-35' : 'opacity-0'} bg-[#020310] z-40`} />
+          {activeTab === 'build' && (
+            <div className="space-y-4">
+              <div className="flex gap-1 overflow-x-auto pb-2 scrollbar-hide">
+                {['residential', 'production', 'commercial', 'public', 'infrastructure', 'nature'].map(cat => (
+                  <button key={cat} onClick={() => setShopCategory(cat as any)} className={`px-4 py-2 rounded-xl border text-[9px] font-black uppercase whitespace-nowrap transition-all ${shopCategory === cat ? 'bg-indigo-700 border-indigo-400 text-white' : 'bg-indigo-950/30 border-indigo-500/20 text-slate-500 hover:border-indigo-400/50'}`}>{cat}</button>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 gap-2">
+                {Object.entries(BUILDINGS).filter(([_, s]) => s.category === shopCategory).map(([type, stats]) => {
+                  const affordable = Object.entries(stats.cost).every(([res, amt]) => (gameState.resources as any)[res] >= (amt || 0));
+                  return (
+                    <button key={type} onClick={() => setSelectedBlueprint(type as BuildingType)} className={`p-4 rounded-3xl border text-left transition-all flex gap-4 items-center ${selectedBlueprint === type ? 'border-indigo-400 bg-indigo-600/20 shadow-[inset_0_0_20px_rgba(79,70,229,0.1)]' : affordable ? 'bg-indigo-950/20 border-white/5 hover:bg-indigo-900/30' : 'opacity-40 grayscale cursor-not-allowed border-white/5 bg-black/20'}`}>
+                      <div className="w-12 h-12 rounded-xl bg-black/30 flex items-center justify-center shrink-0">
+                         {getBuildingVisual(type as BuildingType, 1)}
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex justify-between items-center mb-0.5">
+                          <h4 className="font-black text-[11px] uppercase tracking-tight">{stats.label}</h4>
+                          <span className="text-emerald-400 font-mono text-[10px] font-bold">${stats.cost.money?.toLocaleString()}</span>
+                        </div>
+                        <p className="text-[9px] text-slate-500 italic leading-tight">{stats.description} ({stats.width}x{stats.height})</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'market' && (
+            <div className="space-y-4">
+               {Object.entries(gameState.marketPrices).map(([res, priceObj]) => {
+                 const p = priceObj as MarketPrice;
+                 const currentStock = (gameState.resources as any)[res] || 0;
+                 return (
+                   <div key={res} className="p-5 bg-indigo-950/20 border border-white/5 rounded-3xl space-y-4 shadow-xl">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="font-black uppercase text-xs text-indigo-100 tracking-widest">{res}</h4>
+                          <span className="text-[10px] text-slate-500 uppercase font-bold">Zalihe: {Math.floor(currentStock)}</span>
+                        </div>
+                        <div className="text-right">
+                          <p className={`font-mono text-sm font-black flex items-center gap-1 ${p.trend === 'up' ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {p.trend === 'up' ? <TrendingUp size={14}/> : <TrendingDown size={14}/>}
+                            ${Math.floor(p.current)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button onClick={() => sellResource(res as ResourceType, 10)} disabled={currentStock < 10} className="py-2 bg-emerald-600/10 border border-emerald-500/20 rounded-xl text-[9px] font-black uppercase text-emerald-400 hover:bg-emerald-600/20 disabled:opacity-20 transition-all">Prodaj 10</button>
+                        <button onClick={() => sellResource(res as ResourceType, 100)} disabled={currentStock < 100} className="py-2 bg-emerald-600/20 border border-emerald-500/30 rounded-xl text-[9px] font-black uppercase text-white hover:bg-emerald-600 transition-all disabled:opacity-20">Prodaj 100</button>
+                      </div>
+                   </div>
+                 );
+               })}
+            </div>
+          )}
         </div>
+      </div>
 
-        {/* FEEDBACK & HUD */}
-        {floatingTexts.map(ft => (
-          <div key={ft.id} className="fixed text-emerald-400 font-black text-3xl pointer-events-none animate-bounce z-50 drop-shadow-[0_0_15px_rgba(52,211,153,1)]" style={{ left: ft.x, top: ft.y - 60 }}>
-            {ft.text}
-          </div>
-        ))}
-
-        {/* CONTROLS */}
-        <div className="absolute bottom-8 right-8 z-30 flex flex-col gap-4">
-           <div className="bg-[#0b0b0d]/95 p-4 rounded-[2rem] border border-white/10 flex flex-col gap-4 shadow-2xl backdrop-blur-3xl ring-2 ring-white/5">
-              <button onClick={() => setGameState(p => ({ ...p, camera: { ...p.camera, zoom: Math.min(2.0, p.camera.zoom + 0.3) } }))} className="p-4 bg-white/5 hover:bg-white/10 rounded-2xl shadow-xl transition-all active:scale-90"><Maximize2 size={24} /></button>
-              <button onClick={() => setGameState(p => ({ ...p, camera: { ...p.camera, zoom: Math.max(0.1, p.camera.zoom - 0.3) } }))} className="p-4 bg-white/5 hover:bg-white/10 rounded-2xl rotate-180 shadow-xl transition-all active:scale-90"><Maximize2 size={24} /></button>
-              <button onClick={() => setGameState(p => ({ ...p, camera: { x: window.innerWidth/2 - 16*40, y: window.innerHeight/2 - 16*40, zoom: 0.8 } }))} className="p-4 text-indigo-400 hover:bg-indigo-500/10 rounded-2xl transition-all active:scale-90"><Move size={24} /></button>
+      {/* MAP VIEWPORT */}
+      <div className="flex-1 relative bg-[#05080f] overflow-hidden">
+        {/* HUD */}
+        <div className="absolute top-0 left-0 right-0 h-16 bg-[#07101f]/90 backdrop-blur-xl border-b border-white/5 flex items-center px-10 z-40 gap-10 shadow-2xl">
+           <div className="flex gap-10 overflow-x-auto scrollbar-hide flex-1 items-center">
+              {Object.entries(gameState.resources).slice(0, 6).map(([r, v]) => (
+                <div key={r} className="flex flex-col items-center min-w-[70px]">
+                  <span className="text-[8px] font-black text-indigo-400 uppercase tracking-widest mb-1">{r}</span>
+                  <span className={`font-mono text-sm font-black ${r === 'money' ? 'text-emerald-400' : 'text-white'}`}>
+                    {r === 'money' ? '$' : ''}{Math.floor(v as number).toLocaleString()}
+                  </span>
+                </div>
+              ))}
+           </div>
+           <div className="flex items-center gap-4">
+              {isNight ? <Moon size={20} className="text-indigo-400 animate-pulse"/> : <Sun size={20} className="text-amber-400"/>}
+              <div className="h-8 w-px bg-white/10 mx-2" />
+              <div className="px-4 py-1.5 bg-black/40 rounded-full border border-white/5 text-[10px] font-black tracking-tighter uppercase">DAN {gameState.day}</div>
            </div>
         </div>
 
-        {/* UPGRADE OVERLAY */}
-        {selectedBuilding && (
-          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-40 w-[90%] sm:w-auto animate-in slide-in-from-bottom-20 duration-500">
-             <div className="bg-[#0b0b0d]/98 border-2 border-indigo-500/50 p-6 lg:p-10 rounded-[4rem] shadow-2xl flex flex-col sm:flex-row items-center gap-6 lg:gap-12 backdrop-blur-3xl">
-                <div className="flex flex-col text-center sm:text-left">
-                   <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1 italic leading-none">SELEKCIJA</span>
-                   <p className="text-xl lg:text-3xl font-black font-mono tracking-tighter text-white uppercase leading-none">{BUILDINGS[selectedBuilding.type].label} <span className="text-gray-500">LV {selectedBuilding.level}</span></p>
-                </div>
-                <div className="h-px sm:h-12 w-full sm:w-px bg-white/10" />
-                <div className="flex items-center gap-4 lg:gap-8">
-                   <button 
-                      onClick={() => handleUpgrade(selectedBuilding.id)}
-                      disabled={gameState.resources.money < Math.floor(BUILDINGS[selectedBuilding.type].cost.money! * selectedBuilding.level * 2.5)}
-                      className="px-8 lg:px-12 py-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-20 rounded-[2rem] text-[12px] lg:text-[14px] font-black uppercase tracking-widest transition-all shadow-2xl active:scale-95"
-                   >
-                      UPGRADE (${Math.floor(BUILDINGS[selectedBuilding.type].cost.money! * selectedBuilding.level * 2.5).toLocaleString()})
-                   </button>
-                   <button onClick={() => setSelectedBuildingId(null)} className="px-8 lg:px-12 py-4 bg-white/5 hover:bg-white/10 rounded-[2rem] text-[12px] lg:text-[14px] font-black uppercase border border-white/10 transition-all active:scale-95">ZATVORI</button>
-                </div>
-             </div>
-          </div>
-        )}
+        {/* CONTROLS */}
+        <div className="absolute top-20 right-6 flex flex-col gap-3 z-40">
+          <button onClick={() => setGameState(p => ({...p, camera: {...p.camera, zoom: Math.min(4, p.camera.zoom + 0.2)}}))} className="w-12 h-12 bg-[#07101f]/90 border border-white/10 rounded-2xl flex items-center justify-center hover:bg-indigo-600 transition-all shadow-2xl"><Plus/></button>
+          <button onClick={() => setGameState(p => ({...p, camera: {...p.camera, zoom: Math.max(0.2, p.camera.zoom - 0.2)}}))} className="w-12 h-12 bg-[#07101f]/90 border border-white/10 rounded-2xl flex items-center justify-center hover:bg-indigo-600 transition-all shadow-2xl"><Minus/></button>
+          <button onClick={() => setGameState(p => ({...p, camera: {x: window.innerWidth/2, y: window.innerHeight/2, zoom: 1}}))} className="w-12 h-12 bg-[#07101f]/90 border border-white/10 rounded-2xl flex items-center justify-center hover:bg-indigo-600 transition-all shadow-2xl"><Target/></button>
+          <div className="h-px bg-white/10 my-1" />
+          <button onClick={() => { 
+            if (history.length > 0) {
+              setGameState(p => ({ ...p, buildings: history[0] }));
+              setHistory(h => h.slice(1));
+            }
+          }} className="w-12 h-12 bg-amber-600/10 border border-amber-500/30 rounded-2xl flex items-center justify-center hover:bg-amber-600 transition-all shadow-2xl" title="Undo"><Undo2/></button>
+          <button onClick={() => { if(window.confirm("Ovo će obrisati sav vaš napredak. Da li ste sigurni?")) setGameState(getInitialGameState()); }} className="w-12 h-12 bg-red-600/10 border border-red-500/30 rounded-2xl flex items-center justify-center hover:bg-red-600 transition-all shadow-2xl" title="Reset"><RotateCcw/></button>
+        </div>
 
-        {/* SELECTION HUD */}
-        {selectedCell && !selectedBuildingId && (
-          <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-30 w-[90%] sm:w-auto animate-in slide-in-from-bottom-20 duration-700">
-             <div className="bg-[#0c0c0e]/98 border-2 border-indigo-500/50 p-8 lg:p-10 rounded-[4rem] shadow-2xl flex flex-col sm:flex-row items-center gap-6 lg:gap-16 backdrop-blur-[50px]">
-                <div className="flex flex-col text-center sm:text-left">
-                   <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-1 italic leading-none">KOORDINATE</span>
-                   <p className="text-3xl lg:text-4xl font-black font-mono tracking-tighter text-white leading-none">{selectedCell.x}, {selectedCell.y}</p>
+        {/* THE WORLD */}
+        <div 
+          onMouseDown={e => { dragStart.current = { x: e.clientX - gameState.camera.x, y: e.clientY - gameState.camera.y }; setIsDragging(true); dragDistance.current = 0; }}
+          onMouseMove={e => { if(isDragging) { dragDistance.current++; setGameState(p => ({...p, camera: {...p.camera, x: e.clientX - dragStart.current.x, y: e.clientY - dragStart.current.y }})); } }}
+          onMouseUp={() => setIsDragging(false)}
+          className="w-full h-full relative cursor-grab active:cursor-grabbing grass-pattern"
+        >
+          <div className="absolute origin-center transition-transform map-view"
+               style={{ 
+                 left: gameState.camera.x, top: gameState.camera.y, 
+                 transform: `translate(-50%, -50%) scale(${gameState.camera.zoom})`,
+                 width: gameState.gridSize * CELL_SIZE, height: gameState.gridSize * CELL_SIZE
+               }}>
+            
+            <div className="absolute inset-0 grid" style={{ gridTemplateColumns: `repeat(${gameState.gridSize}, ${CELL_SIZE}px)` }}>
+               {Array.from({length: gameState.gridSize * gameState.gridSize}).map((_, i) => (
+                 <div key={i} onClick={() => { if(dragDistance.current < 5 && selectedBlueprint) handleBuild(selectedBlueprint, i % gameState.gridSize, Math.floor(i / gameState.gridSize)); }} 
+                      className="border border-white/[0.02] hover:bg-indigo-400/10 transition-colors" />
+               ))}
+            </div>
+
+            {gameState.buildings.map(b => {
+              const stats = BUILDINGS[b.type];
+              if (stats.isRoad) {
+                const conn = getRoadConnections(b);
+                const isH = b.type === 'highway';
+                return (
+                  <div key={b.id} className="absolute road-base overflow-hidden shadow-inner" 
+                       style={{ left: b.position.x * CELL_SIZE, top: b.position.y * CELL_SIZE, width: b.width * CELL_SIZE, height: b.height * CELL_SIZE }}>
+                    {(conn.l || conn.r || (!conn.t && !conn.b)) && (
+                      <>{isH ? <div className="highway-center-line" /> : <div className="road-2x2-line" />}</>
+                    )}
+                    {(conn.t || conn.b) && (
+                      <>{isH ? <div className="highway-center-line rotate-90" /> : <div className="road-2x2-line-v" />}</>
+                    )}
+                  </div>
+                );
+              }
+
+              return (
+                <div key={b.id} onClick={(e) => handleBuildingClick(e, b)}
+                     className={`absolute building-3d bg-slate-800 rounded-xl flex flex-col items-center justify-center cursor-pointer border border-white/10 ${selectedBuildingId === b.id ? 'ring-2 ring-indigo-400 z-30 scale-105' : 'z-20'}`}
+                     style={{ 
+                        left: b.position.x * CELL_SIZE, top: b.position.y * CELL_SIZE, 
+                        width: b.width * CELL_SIZE, height: b.height * CELL_SIZE,
+                        boxShadow: b.level >= 5 ? '0 0 20px rgba(79, 70, 229, 0.4)' : '10px 10px 0px rgba(0,0,0,0.4)'
+                     }}>
+                   
+                   <div className={`flex flex-col items-center gap-1 transition-all duration-500 ${b.level >= 5 ? 'scale-110' : ''}`}>
+                      <div className={`drop-shadow-xl filter transition-all ${b.level >= 5 ? 'saturate-200 brightness-110' : 'saturate-150'}`}>
+                        {getBuildingVisual(b.type, b.level)}
+                      </div>
+                      <span className="text-[10px] font-black opacity-30 select-none">
+                        {getBuildingEmoji(b.type)}
+                      </span>
+                   </div>
+
+                   <div className="absolute top-1 right-1 bg-indigo-600 px-1.5 py-0.5 rounded shadow text-[8px] font-black uppercase">L{b.level}</div>
+                   {stats.category === 'residential' && <div className="absolute -bottom-1 -right-1 animate-bounce"><Coins size={14} className="text-yellow-400 drop-shadow-md"/></div>}
                 </div>
-                <div className="h-px sm:h-16 w-full sm:w-px bg-white/10" />
-                <div className="flex items-center gap-4 lg:gap-8">
-                   <button onClick={() => setSelectedCell(null)} className="px-8 lg:px-12 py-4 bg-white/5 hover:bg-white/10 rounded-[2rem] text-[12px] lg:text-[13px] font-black uppercase border border-white/5 transition-all active:scale-95">RESETOVALI</button>
-                   {isZoneUnlocked(selectedCell.x, selectedCell.y) ? (
-                     <div className="px-8 lg:px-12 py-4 bg-emerald-500/20 rounded-[2rem] border border-emerald-400/30 text-[12px] lg:text-[13px] font-black uppercase text-emerald-400 tracking-widest flex items-center gap-3 animate-pulse">
-                        <Plus size={18} /> DOSTUPNO
-                     </div>
-                   ) : (
-                     <div className="px-8 lg:px-12 py-4 bg-red-500/10 rounded-[2rem] border border-red-500/20 text-[12px] lg:text-[13px] font-black uppercase text-red-400 tracking-widest">
-                        ZAKLJUČANO
-                     </div>
-                   )}
-                </div>
-             </div>
+              );
+            })}
+
+            {gameState.npcs.map(n => (
+              <div key={n.id} className="absolute transition-all duration-1000 ease-linear pointer-events-none z-50"
+                   style={{ left: n.x * CELL_SIZE, top: n.y * CELL_SIZE, transform: 'translate(-50%, -50%)' }}>
+                {n.isDriving ? (
+                  <div className="car-3d" style={{ transform: `rotate(${Math.random() > 0.5 ? 0 : 90}deg)` }} />
+                ) : (
+                  <span className="text-lg drop-shadow-md">🚶</span>
+                )}
+              </div>
+            ))}
           </div>
-        )}
+        </div>
+
+        {/* FLOATING TEXT */}
+        {floatingTexts.map(ft => (
+          <div key={ft.id} className="fixed font-black text-emerald-400 text-3xl italic drop-shadow-[0_4px_10px_rgba(0,0,0,0.5)] z-[100] animate-pulse pointer-events-none transform -translate-y-20 transition-all duration-1000" style={{ left: ft.x, top: ft.y }}>{ft.text}</div>
+        ))}
+
+        {/* UPGRADE PANEL */}
+        {selectedBuildingId && (() => {
+          const b = gameState.buildings.find(x => x.id === selectedBuildingId);
+          if (!b) return null;
+          const stats = BUILDINGS[b.type];
+          const upgradeCost = Math.floor(stats.cost.money! * b.level * 2);
+          const canAfford = gameState.resources.money >= upgradeCost;
+
+          return (
+            <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-[600px] bg-[#07101f]/95 backdrop-blur-3xl border border-white/10 p-10 rounded-[40px] shadow-2xl z-50 flex flex-col gap-8 animate-in slide-in-from-bottom-20">
+               <div className="flex items-center gap-8">
+                  <div className="w-28 h-28 rounded-3xl bg-indigo-600/10 flex items-center justify-center shadow-inner border border-white/5">
+                    <div className="scale-[2] transition-transform duration-700">
+                       {getBuildingVisual(b.type, b.level)}
+                    </div>
+                  </div>
+                  <div className="flex-1">
+                    <h2 className="text-3xl font-black uppercase tracking-tighter text-white mb-2">{stats.label} <span className="text-indigo-400 font-mono">L{b.level}</span></h2>
+                    <p className="text-xs text-slate-400 italic mb-6 leading-relaxed">{stats.description || 'Važan deo vašeg grada.'}</p>
+                    <div className="flex gap-4">
+                       <div className="flex items-center gap-3 bg-white/5 px-4 py-2 rounded-2xl border border-white/5">
+                          <Zap size={18} className="text-amber-400"/>
+                          <div className="flex flex-col">
+                            <span className="text-[8px] uppercase font-black text-slate-500">Produkcija</span>
+                            <span className="text-xs font-black text-white">+{Math.floor((Object.values(stats.production)[0] as number || 0) * b.level)}</span>
+                          </div>
+                       </div>
+                       <div className="flex items-center gap-3 bg-white/5 px-4 py-2 rounded-2xl border border-white/5">
+                          <Users size={18} className="text-indigo-400"/>
+                          <div className="flex flex-col">
+                            <span className="text-[8px] uppercase font-black text-slate-500">Kapacitet</span>
+                            <span className="text-xs font-black text-white">{stats.workerCapacity * b.level}</span>
+                          </div>
+                       </div>
+                    </div>
+                  </div>
+               </div>
+
+               <div className="flex gap-4">
+                  <button onClick={() => handleUpgrade(b.id)} disabled={!canAfford}
+                          className={`flex-[2] py-5 rounded-3xl flex items-center justify-center gap-3 font-black uppercase text-sm transition-all shadow-xl ${canAfford ? 'bg-indigo-600 hover:bg-indigo-500 upgrade-glow text-white' : 'bg-white/5 text-slate-500 cursor-not-allowed border border-white/5'}`}>
+                    <ArrowUpCircle size={24}/>
+                    {canAfford ? `Nadogradi na nivo ${b.level + 1} ($${upgradeCost.toLocaleString()})` : 'Nedovoljno novca'}
+                  </button>
+                  <button onClick={() => setSelectedBuildingId(null)} className="flex-1 py-5 bg-white/5 border border-white/10 rounded-3xl font-black uppercase text-sm hover:bg-white/10 transition-all">Zatvori</button>
+               </div>
+            </div>
+          );
+        })()}
+
+        {/* AI ADVISOR */}
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 px-10 py-4 bg-[#07101f]/95 backdrop-blur-xl rounded-full border border-indigo-500/30 shadow-2xl z-40 flex items-center gap-6 pointer-events-none">
+           <div className={`w-3 h-3 rounded-full ${gameState.isAnalyzing ? 'bg-amber-400 animate-spin' : 'bg-indigo-400 animate-pulse'}`} />
+           <p className="text-xs font-bold italic text-indigo-100 tracking-tight">{gameState.aiAdvice}</p>
+        </div>
       </div>
     </div>
   );

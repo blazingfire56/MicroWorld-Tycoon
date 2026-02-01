@@ -30,19 +30,15 @@ export interface GameEvent {
   description: string;
 }
 
-export type BuildingCategory = 'residential' | 'production' | 'public' | 'commercial' | 'infrastructure';
+export type BuildingCategory = 'residential' | 'production' | 'public' | 'commercial' | 'infrastructure' | 'nature';
 
 export type BuildingType = 
-  // Residential
-  | 'starter_home' | 'small_shack' | 'suburban_house' | 'modern_villa' | 'luxury_mansion' | 'apartment' | 'skyscraper' | 'penthouse_tower' | 'capsule_hotel' | 'eco_pod'
-  // Production
-  | 'scavenger_hut' | 'farm' | 'orchard' | 'quarry' | 'iron_mine' | 'workshop' | 'factory' | 'chemical_plant' | 'robotics_lab' | 'biotech_greenhouse' | 'nano_forge'
-  // Public
-  | 'school' | 'university' | 'hospital' | 'clinic' | 'park' | 'stadium' | 'library' | 'museum' | 'fire_station' | 'police_station' | 'military_base' | 'cinema' | 'cathedral'
-  // Commercial
-  | 'trade_post' | 'grocery_store' | 'mall' | 'bank' | 'office_complex' | 'data_center' | 'techhub' | 'stock_exchange' | 'bitcoin_mine' | 'casino'
-  // Infrastructure
-  | 'road' | 'dirt_path' | 'water_works' | 'trash_depot' | 'powerplant' | 'nuclear_plant' | 'solar_farm' | 'airport' | 'harbor' | 'hyperloop_station' | 'teleport_pad';
+  | 'starter_home' | 'small_shack' | 'suburban_house' | 'modern_villa' | 'luxury_mansion' | 'apartment' | 'skyscraper' | 'penthouse_tower'
+  | 'farm' | 'quarry' | 'iron_mine' | 'workshop' | 'factory' | 'robotics_lab' | 'nano_forge'
+  | 'school' | 'university' | 'hospital' | 'park' | 'stadium' | 'police_station' | 'fire_station' | 'town_hall' | 'cathedral' | 'museum'
+  | 'trade_post' | 'grocery_store' | 'mall' | 'bank' | 'casino' | 'stock_exchange'
+  | 'road' | 'highway' | 'sidewalk' | 'traffic_light' | 'airport' | 'harbor' | 'powerplant' | 'nuclear_plant' | 'water_works'
+  | 'tree' | 'river' | 'rock' | 'forest';
 
 export interface Building {
   id: string;
@@ -60,10 +56,11 @@ export interface NPC {
   y: number;
   targetX: number;
   targetY: number;
-  type: 'citizen' | 'worker' | 'player' | 'rich' | 'official';
+  type: 'citizen' | 'worker' | 'player' | 'official';
   homeId?: string;
   workId?: string;
-  state: 'sleeping' | 'working' | 'commuting' | 'leisure' | 'shopping';
+  state: 'sleeping' | 'working' | 'commuting' | 'leisure' | 'shopping' | 'homeless';
+  isDriving: boolean;
   lastSpendingTick: number;
 }
 
@@ -72,9 +69,7 @@ export interface Zone {
   name: string;
   cost: number;
   unlocked: boolean;
-  color: string;
-  gridRange: { xMin: number; xMax: number; yMin: number; yMax: number };
-  expansionSize: number; // The grid size this zone unlocks
+  gridSize: number; // The grid size this zone unlocks
 }
 
 export interface GameState {
@@ -100,13 +95,13 @@ export interface GameState {
 export interface BuildingStats {
   category: BuildingCategory;
   cost: Partial<Resources>;
+  // Fix: explicitly allow reputation in production and consumption as it's not a standard resource.
   production: Partial<Resources> & { reputation?: number };
-  consumption: Partial<Resources>;
+  consumption: Partial<Resources> & { reputation?: number };
   workerCapacity: number;
   description: string;
   label: string;
   repImpact?: number;
-  unlockRequirement?: { type: BuildingType | 'tier'; count: number };
   width: number;
   height: number;
   isRoad?: boolean;
